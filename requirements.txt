@@ -1,5 +1,3 @@
-aiogram==3.4.1
-openai
+aiogram==2.25.2
 python-dotenv
-
-
+openai
