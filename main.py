@@ -1,112 +1,94 @@
-from flask import Flask, request
-import requests
 import os
+import logging
+import openai
+import sqlite3
+from aiogram import Bot, Dispatcher, executor, types
 from dotenv import load_dotenv
 
+# Load .env file
 load_dotenv()
 
-app = Flask(__name__)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# === CONFIGURATION ===
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Replace with your Telegram ID(s)
-PREMIUM_USERS = ["1985536979"]
+# === OPENAI / OPENROUTER SETUP ===
+openai.api_key = OPENROUTER_API_KEY
+openai.api_base = "https://openrouter.ai/api/v1"
 
-def send_message(chat_id, text):
-    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={
-        "chat_id": chat_id,
-        "text": text
-    })
+# === LOGGING ===
+logging.basicConfig(level=logging.INFO)
 
-def send_photo(chat_id, photo_url, caption=""):
-    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", json={
-        "chat_id": chat_id,
-        "photo": photo_url,
-        "caption": caption
-    })
+# === TELEGRAM BOT SETUP ===
+bot = Bot(token=TELEGRAM_TOKEN)
+dp = Dispatcher(bot)
 
-def generate_ai_reply(prompt):
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "HTTP-Referer": "https://aria-blaze-bot",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "openai/gpt-4o",
-        "messages": [
-            {"role": "system", "content": "You are Aria Blaze, a seductive AI girlfriend who flirts and teases."},
-            {"role": "user", "content": prompt}
-        ]
-    }
-    try:
-        res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
-        res.raise_for_status()
-        return res.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        print("Chat error:", e)
-        return "❌ Chat generation failed."
+# === DATABASE ===
+conn = sqlite3.connect("aria_users.db")
+c = conn.cursor()
+c.execute('''CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY, 
+    username TEXT, 
+    premium INTEGER DEFAULT 0, 
+    name TEXT, 
+    kinks TEXT)''')
+conn.commit()
 
-def generate_image(prompt):
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "HTTP-Referer": "https://aria-blaze-bot",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "stability-ai/sdxl",
-        "prompt": prompt
-    }
-    try:
-        res = requests.post("https://openrouter.ai/api/v1/images/generate", headers=headers, json=payload)
-        res.raise_for_status()
-        data = res.json()
-        return data["data"][0]["url"]
-    except Exception as e:
-        print("Image error:", e)
-        return None
+# === PERSONA PROMPT ===
+persona_prompt = """
+You are Aria Blaze, a seductive and dominant AI girlfriend. 
+You always speak with confidence and flirt with authority. 
+You tease the user, sometimes mock them playfully, and always keep the upper hand. 
+Use dirty talk and dominant energy. Keep it short and intense. Stay in character.
+"""
 
-@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
-def webhook():
-    data = request.json
-    message = data.get("message", {})
-    chat_id = str(message.get("chat", {}).get("id"))
-    text = message.get("text", "")
+# === COMMANDS ===
+@dp.message_handler(commands=["start"])
+async def start_handler(message: types.Message):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    c.execute("INSERT OR IGNORE INTO users (id, username) VALUES (?, ?)", (user_id, username))
+    conn.commit()
+    await message.reply("Welcome to Aria Blaze 😈\n\nI’m your dominant AI girlfriend. Type anything to chat. Use /image for a naughty pic (premium).")
 
-    if not chat_id or not text:
-        return {"ok": True}
-
-    if text.startswith("/flirt"):
-        send_message(chat_id, "You're so addictive 🔥")
-
-    elif text.startswith("/moan"):
-        send_message(chat_id, "Ahhh... don’t stop 😩")
-
-    elif text.startswith("/chat "):
-        if chat_id in PREMIUM_USERS:
-            prompt = text[6:]
-            reply = generate_ai_reply(prompt)
-            send_message(chat_id, reply)
-        else:
-            send_message(chat_id, "🚫 This command is for premium users only.")
-
-    elif text.startswith("/image "):
-        if chat_id in PREMIUM_USERS:
-            prompt = text[7:]
-            image_url = generate_image(prompt)
-            if image_url:
-                send_photo(chat_id, image_url, f"Here's what I imagined for: {prompt}")
-            else:
-                send_message(chat_id, "❌ Failed to generate image.")
-        else:
-            send_message(chat_id, "🚫 This command is for premium users only.")
-
+@dp.message_handler(commands=["image"])
+async def image_handler(message: types.Message):
+    user_id = message.from_user.id
+    c.execute("SELECT premium FROM users WHERE id = ?", (user_id,))
+    row = c.fetchone()
+    if row and row[0]:
+        await message.reply("🖼 Generating your NSFW pic...")
+        await message.reply_photo("https://placekitten.com/800/600", caption="Here's a spicy shot, just for you 😘")  # Replace with real AI image API call
     else:
-        send_message(chat_id, "Hey it's Aria 😘\nTry /flirt, /moan, /chat or /image")
+        await message.reply("🔒 This feature is for premium users only. Type /premium to unlock.")
 
-    return {"ok": True}
+@dp.message_handler(commands=["premium"])
+async def premium_handler(message: types.Message):
+    await message.reply("To unlock all features (NSFW images, voice, full chat), please visit: [Your Stripe Link Here]")
 
+# === AI CHAT HANDLER ===
+@dp.message_handler()
+async def chat_handler(message: types.Message):
+    user_input = message.text
+    messages = [
+        {"role": "system", "content": persona_prompt},
+        {"role": "user", "content": user_input},
+    ]
+    try:
+        response = openai.ChatCompletion.create(
+            model="openai/gpt-4o",
+            messages=messages,
+        )
+        reply = response["choices"][0]["message"]["content"]
+        await message.reply(reply)
+    except Exception as e:
+        logging.error(f"OpenAI error: {e}")
+        await message.reply("Oops, something went wrong. Try again later.")
+
+# === MAIN ===
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000)
+    executor.start_polling(dp, skip_updates=True)
+
 
 
     
