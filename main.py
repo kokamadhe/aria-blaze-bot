@@ -6,8 +6,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+TELEGRAM_TOKEN = os.getenv("8184667097:AAERJoqVj2dX4sbDdQR4Ryq3I8-AM94PgmU")
+OPENROUTER_API_KEY = os.getenv("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")
 
 # Replace with your Telegram ID(s)
 PREMIUM_USERS = ["1985536979"]
@@ -107,3 +107,4 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
+    
